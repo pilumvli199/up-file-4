@@ -1,7 +1,13 @@
 """
-NIFTY Trading Bot - Main Orchestrator v8.0 - COMPREHENSIVE UPGRADE
+NIFTY Trading Bot - Main Orchestrator v8.1 - HOTFIX
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🆕 v8.0 NEW FEATURES:
+🆕 v8.1 HOTFIX (Critical Bug Fixes):
+1. Position tracking cleared on startup (fixes "Already in position" bug)
+2. Scan counter fixed (was stuck at #21)
+3. Stale position state auto-detected and cleared
+4. Better position validation logic
+
+🆕 v8.0 FEATURES:
 1. OI Dominance comparison (solves "both building" confusion)
 2. Opening volatility filter (skip 9:15-9:25)
 3. ATM stability check (blocks signals when ATM shifts)
@@ -24,7 +30,7 @@ from signal_engine import SignalGenerator, SignalValidator
 from position_tracker import PositionTracker
 from alerts import TelegramBot, MessageFormatter
 
-BOT_VERSION = "8.0-COMPREHENSIVE-UPGRADE"
+BOT_VERSION = "8.1-HOTFIX"
 
 logger = setup_logger("main")
 
@@ -56,12 +62,21 @@ class NiftyTradingBot:
         self.telegram = TelegramBot()
         
         self.is_running = False
+        
+        # 🆕 v8.1 FIX: Force clear position state on startup
         self.in_position = False
         self.current_signal = None
+        
+        # Clear position tracker state
+        if hasattr(self.position_tracker, 'clear_position'):
+            self.position_tracker.clear_position()
         
         # 🆕 v8.0: Signal pending revalidation
         self.pending_signal = None
         self.pending_signal_time = None
+        
+        # 🆕 v8.1: Scan counter
+        self.scan_count = 0
     
     async def initialize(self):
         """Initialize bot and connections"""
@@ -127,9 +142,16 @@ class NiftyTradingBot:
 🚀 <b>NIFTY BOT v{BOT_VERSION}</b>
 
 ━━━━━━━━━━━━━━━━━━━━
-🔧 <b>v8.0 COMPREHENSIVE UPGRADE</b>
+🔧 <b>v8.1 HOTFIX</b>
 ━━━━━━━━━━━━━━━━━━━━
 
+🆕 <b>Critical Fixes:</b>
+✅ Position tracking cleared on startup
+✅ Scan counter fixed (was stuck at #21)
+✅ Stale position state auto-cleared
+✅ Better position validation
+
+<b>v8.0 Features:</b>
 ✅ OI Dominance (both building fix)
 ✅ Opening volatility filter (9:15-9:25)
 ✅ ATM stability check (3-scan tracking)
@@ -236,6 +258,7 @@ class NiftyTradingBot:
 OI Tracker: {OI_MEMORY_SCANS} scans capacity
 Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
 🆕 ATM Tracker: First 3 scans (normal)
+🆕 Position: CLEARED on startup
 
 ━━━━━━━━━━━━━━━━━━━━
 ⏰ <b>BOT STARTED</b>
@@ -246,7 +269,7 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
 🔄 Scan Interval: {SCAN_INTERVAL}s
 📡 Ready for market data...
 
-<i>Note: First 3 scans will build ATM history (normal startup behavior)</i>
+<i>v8.1 Hotfix: Position tracking bugs fixed!</i>
 """
             
             # Send startup message
@@ -260,7 +283,11 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
             else:
                 logger.info("⏸️ Telegram disabled - Skipping startup message")
             
-            logger.info("✅ Bot initialized (v8.0 COMPREHENSIVE UPGRADE)")
+            # 🆕 v8.1: Confirm position state cleared
+            logger.info("🔄 Position tracker initialized - Ready for new signals")
+            logger.info(f"   in_position: {self.in_position} (cleared)")
+            
+            logger.info("✅ Bot initialized (v8.1 HOTFIX)")
             logger.info(f"📅 Futures: {futures_contract}")
             logger.info("=" * 60)
             
@@ -284,13 +311,16 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
     async def scan_market(self):
         """Single market scan with 30m OI support"""
         try:
+            # 🆕 v8.1: Increment scan counter
+            self.scan_count += 1
+            
             now_ist = get_ist_time()
             time_str = format_time_ist(now_ist)
             market_status = "OPEN" if is_market_open() else "CLOSED"
             
             logger.info("")
             logger.info("=" * 60)
-            logger.info(f"⏰ SCAN #{self.oi_tracker.get_status()['scans']+1} | {time_str} | {market_status}")
+            logger.info(f"⏰ SCAN #{self.scan_count} | {time_str} | {market_status}")
             logger.info("=" * 60)
             
             if market_status == "CLOSED":
@@ -532,11 +562,22 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
             
             # ========== SIGNAL GENERATION ==========
             
-            logger.info("\n🎯 Checking for entry setup...")
+            logger.info("")
+            logger.info("🎯 Checking for entry setup...")
             
+            # 🆕 v8.1: Robust position validation
             if self.in_position:
-                logger.info("  ⏸️ Already in position - Skipping")
-                return
+                # Verify we actually have a signal object
+                if self.current_signal is not None:
+                    logger.info(f"  ⏸️ Already in position: {self.current_signal.signal_type.value}")
+                    logger.debug(f"     Entry: ₹{self.current_signal.entry_price:.2f} | Target: ₹{self.current_signal.target_price:.2f}")
+                    return
+                else:
+                    # Position flag set but no signal - STALE STATE!
+                    logger.warning(f"  ⚠️ Stale position flag detected - Clearing and continuing")
+                    logger.warning(f"     This happens when bot restarts with old position state")
+                    self.in_position = False
+                    self.current_signal = None
             
             # 🆕 v8.0: ATM STABILITY CHECK (before signal generation)
             if not atm_stable:
