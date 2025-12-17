@@ -308,8 +308,10 @@ class SignalGenerator:
         
         logger.debug(f"  🚀 CE Velocity: {ce_velocity} ({vel_strength}) - {vel_desc}")
         
-        # Reject DECELERATION or EXHAUSTION for CE_BUY
-        if ce_velocity in ['DECELERATION', 'EXHAUSTION']:
+        # ✅ v8.1: Only reject bad velocity if data available (make velocity OPTIONAL)
+        if ce_velocity == 'UNKNOWN':
+            logger.debug(f"  ℹ️ Velocity unavailable - Proceeding without velocity check")
+        elif ce_velocity in ['DECELERATION', 'EXHAUSTION']:
             logger.debug(f"  ❌ CE_BUY rejected: {ce_velocity} pattern (losing momentum)")
             return None
         
@@ -529,7 +531,10 @@ class SignalGenerator:
         
         logger.debug(f"  🚀 PE Velocity: {pe_velocity} ({vel_strength}) - {vel_desc}")
         
-        if pe_velocity in ['DECELERATION', 'EXHAUSTION']:
+        # ✅ v8.1: Only reject bad velocity if data available (make velocity OPTIONAL)
+        if pe_velocity == 'UNKNOWN':
+            logger.debug(f"  ℹ️ Velocity unavailable - Proceeding without velocity check")
+        elif pe_velocity in ['DECELERATION', 'EXHAUSTION']:
             logger.debug(f"  ❌ PE_BUY rejected: {pe_velocity} pattern (losing momentum)")
             return None
         
