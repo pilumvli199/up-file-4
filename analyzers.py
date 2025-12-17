@@ -325,15 +325,17 @@ class OIAnalyzer:
             (is_stable, reason)
         """
         if len(atm_history) < ATM_STABILITY_SCANS:
-            return False, f"Insufficient ATM history: {len(atm_history)}/{ATM_STABILITY_SCANS} scans"
+            # This is normal during first 3 scans (startup)
+            return False, f"Building ATM history: {len(atm_history)}/{ATM_STABILITY_SCANS} scans (normal startup)"
         
         # Check last 3 ATM values
         recent_atms = atm_history[-ATM_STABILITY_SCANS:]
         
         if all(atm == current_atm for atm in recent_atms):
-            return True, f"ATM stable at {current_atm} for {ATM_STABILITY_SCANS} scans"
+            return True, f"ATM stable at {current_atm} for {ATM_STABILITY_SCANS}+ scans"
         else:
-            return False, f"ATM unstable: {recent_atms} (current: {current_atm})"
+            # This is a WARNING situation - ATM actually shifted!
+            return False, f"⚠️ ATM SHIFTED: {recent_atms} → {current_atm} (OI comparison invalid)"
     
     @staticmethod
     def analyze_oi_with_price(ce_5m, ce_15m, pe_5m, pe_15m, price_change_pct):
