@@ -127,16 +127,18 @@ class NiftyTradingBot:
 🚀 <b>NIFTY BOT v{BOT_VERSION}</b>
 
 ━━━━━━━━━━━━━━━━━━━━
-🔧 <b>v7.0 COMPREHENSIVE FIX</b>
+🔧 <b>v8.0 COMPREHENSIVE UPGRADE</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-✅ 30m OI comparison
-✅ OI Velocity (4 patterns)
+✅ OI Dominance (both building fix)
+✅ Opening volatility filter (9:15-9:25)
+✅ ATM stability check (3-scan tracking)
+✅ Real-time revalidation (30s wait)
+✅ Time-based adjustments (lunch/closing)
+✅ OI quality validation
+✅ Volume validation
+✅ 30m OI + Velocity patterns
 ✅ OTM strike analysis
-✅ VWAP strict validation
-✅ Reversal detection
-✅ Trap detection
-✅ Time filter (3:00 PM cutoff)
 
 ━━━━━━━━━━━━━━━━━━━━
 📅 <b>CONTRACT DETAILS</b>
@@ -165,6 +167,11 @@ class NiftyTradingBot:
 • Deep Analysis: {deep_range} (5 strikes)
 • 🆕 OTM: {otm_above}/{otm_below} (Support/Resistance)
 
+<b>🆕 OI Dominance Check:</b>
+• Detects winner when both CE+PE building
+• Requires 10%+ margin for clear signal
+• Solves "9:37 confusion" issue
+
 <b>🆕 OI Velocity Patterns:</b>
 • Acceleration (15m &gt; 30m) → Speed ↑
 • Monster Loading (both &gt; 8%) → Explosive
@@ -180,6 +187,12 @@ class NiftyTradingBot:
 ━━━━━━━━━━━━━━━━━━━━
 🎯 <b>SIGNAL FILTERS</b>
 ━━━━━━━━━━━━━━━━━━━━
+
+<b>🆕 Time-Based Rules:</b>
+• 9:15-9:25: Opening volatility (SKIP)
+• 9:25-9:30: Early signals (85%+ only)
+• 11:30-13:30: Lunch period (80%+ threshold)
+• 15:00-15:30: Exit-only mode
 
 <b>Primary Checks (need 2/3):</b>
 ✅ Multi-TF OI unwinding (5m+15m)
@@ -199,7 +212,8 @@ class NiftyTradingBot:
 <b>Additional Filters:</b>
 • Reversal: Both ATM unwinding → NO_TRADE
 • Trap: One-sided spike → NO_TRADE
-• Time: No new trades after 3:00 PM
+• 🆕 ATM Shift: Wait for 3-scan stability
+• 🆕 Revalidation: 30s wait + OI recheck
 
 ━━━━━━━━━━━━━━━━━━━━
 ⚙️ <b>RISK MANAGEMENT</b>
@@ -221,6 +235,7 @@ class NiftyTradingBot:
 
 OI Tracker: {OI_MEMORY_SCANS} scans capacity
 Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
+🆕 ATM Tracker: First 3 scans (normal)
 
 ━━━━━━━━━━━━━━━━━━━━
 ⏰ <b>BOT STARTED</b>
@@ -230,6 +245,8 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
 
 🔄 Scan Interval: {SCAN_INTERVAL}s
 📡 Ready for market data...
+
+<i>Note: First 3 scans will build ATM history (normal startup behavior)</i>
 """
             
             # Send startup message
@@ -243,7 +260,7 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
             else:
                 logger.info("⏸️ Telegram disabled - Skipping startup message")
             
-            logger.info("✅ Bot initialized (v7.0 COMPREHENSIVE FIX)")
+            logger.info("✅ Bot initialized (v8.0 COMPREHENSIVE UPGRADE)")
             logger.info(f"📅 Futures: {futures_contract}")
             logger.info("=" * 60)
             
@@ -339,8 +356,16 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
             
             atm_stable, atm_reason = self.oi_analyzer.check_atm_stability(atm, self.atm_history)
             if not atm_stable:
-                logger.warning(f"  ⚠️ ATM unstable: {atm_reason}")
-                logger.warning(f"  ⏸️ Skipping signal generation (waiting for ATM stability)")
+                # Check if this is startup (expected) or actual ATM shift (warning)
+                if len(self.atm_history) < ATM_STABILITY_SCANS:
+                    # Normal startup - first 3 scans
+                    logger.info(f"  ⏳ {atm_reason}")
+                    logger.info(f"  💾 Building ATM history for stability check...")
+                else:
+                    # Actual ATM shift - this is a WARNING!
+                    logger.warning(f"  ⚠️ {atm_reason}")
+                    logger.warning(f"  ⏸️ Skipping signals until ATM stabilizes")
+                
                 # Still save OI snapshot for tracking, but skip signal generation
                 logger.info(f"  ✅ Strikes: {len(strike_data)} total (ATM {atm})")
                 logger.info(f"  ✅ Total OI: CE={total_ce:,.0f}, PE={total_pe:,.0f}")
@@ -360,7 +385,7 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
                 
                 return  # Exit early - no signal generation
             else:
-                logger.debug(f"  ✅ ATM stable: {atm_reason}")
+                logger.info(f"  ✅ {atm_reason}")
             
             logger.info(f"  ✅ Strikes: {len(strike_data)} total (ATM {atm})")
             logger.info(f"  ✅ Total OI: CE={total_ce:,.0f}, PE={total_pe:,.0f}")
