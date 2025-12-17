@@ -1,6 +1,11 @@
 """
-Market Analyzers: OI, Volume, Technical, Market Structure
-FIXED: 5 strikes deep analysis, AND logic for unwinding, VWAP validation
+Market Analyzers v7.0: COMPREHENSIVE FIX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🆕 NEW FEATURES:
+1. OI Velocity Classifier (4 patterns from Image 1)
+2. OTM Strike Analysis (Support/Resistance from Image 3)
+3. Improved scenario naming (human-readable)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import pandas as pd
@@ -13,7 +18,7 @@ logger = setup_logger("analyzers")
 
 # ==================== OI Analyzer ====================
 class OIAnalyzer:
-    """Open Interest analysis with 5 strikes deep focus"""
+    """Open Interest analysis with VELOCITY + OTM support"""
     
     @staticmethod
     def calculate_total_oi(strike_data):
@@ -28,10 +33,7 @@ class OIAnalyzer:
     
     @staticmethod
     def calculate_deep_analysis_oi(strike_data, atm_strike):
-        """
-        Calculate CE/PE OI for DEEP ANALYSIS strikes only (5 strikes)
-        ATM ± 2 = 5 strikes where 90% institutional money flows
-        """
+        """Calculate CE/PE OI for DEEP ANALYSIS strikes only (5 strikes)"""
         deep_strikes = get_deep_analysis_strikes(atm_strike)
         
         deep_ce = 0
@@ -46,26 +48,521 @@ class OIAnalyzer:
     
     @staticmethod
     def calculate_pcr(total_pe, total_ce):
-        """Calculate Put-Call Ratio with neutral default"""
+        """Calculate Put-Call Ratio"""
         if total_ce == 0:
             if total_pe == 0:
-                return 1.0  # Neutral (both zero)
+                return 1.0
             else:
-                return 10.0  # Very high PCR (cap)
+                return 10.0
         
         pcr = total_pe / total_ce
-        return round(min(pcr, 10.0), 2)  # Cap at 10.0
+        return round(min(pcr, 10.0), 2)
+    
+    @staticmethod
+    def classify_oi_velocity(oi_5m, oi_15m, oi_30m, has_30m, option_type='CE'):
+        """
+        🆕 NEW: OI Velocity Pattern Classifier (from Image 1)
+        
+        4 Patterns:
+        1. Acceleration: 15m > 30m (speed ↑)
+        2. Deceleration: 15m < 30m (speed ↓)  
+        3. Monster Loading: Both 15m & 30m very high
+        4. Exhaustion: 30m high but 15m low (slowing)
+        
+        Args:
+            oi_5m: 5-minute OI change %
+            oi_15m: 15-minute OI change %
+            oi_30m: 30-minute OI change %
+            has_30m: Whether 30m data available
+            option_type: 'CE' or 'PE'
+        
+        Returns:
+            (pattern, strength, description, confidence_modifier)
+        """
+        if not has_30m:
+            return "UNKNOWN", "none", "Insufficient data (need 30m history)", 0
+        
+        # Use absolute values for comparison
+        abs_5m = abs(oi_5m)
+        abs_15m = abs(oi_15m)
+        abs_30m = abs(oi_30m)
+        
+        # Pattern 1: ACCELERATION (15m > 30m - speed increasing)
+        if abs_15m > abs_30m and abs_15m > VELOCITY_ACCELERATION_MIN:
+            if abs_15m > VELOCITY_ACCELERATION_STRONG:
+                strength = "strong"
+                confidence = 15
+                desc = f"⚡ Speed ↑↑ ({option_type} 15m={oi_15m:.1f}% > 30m={oi_30m:.1f}%)"
+            else:
+                strength = "medium"
+                confidence = 10
+                desc = f"⚡ Speed ↑ ({option_type} 15m={oi_15m:.1f}% > 30m={oi_30m:.1f}%)"
+            
+            return "ACCELERATION", strength, desc, confidence
+        
+        # Pattern 2: DECELERATION (15m < 30m - speed decreasing)
+        elif abs_30m > abs_15m and abs_30m > VELOCITY_DECELERATION_MIN:
+            strength = "weak"
+            confidence = -10
+            desc = f"⚠️ Speed ↓ ({option_type} 15m={oi_15m:.1f}% < 30m={oi_30m:.1f}%)"
+            return "DECELERATION", strength, desc, confidence
+        
+        # Pattern 3: MONSTER LOADING (both 15m & 30m very high)
+        elif abs_15m > VELOCITY_MONSTER_15M and abs_30m > VELOCITY_MONSTER_30M:
+            strength = "strong"
+            confidence = 20
+            desc = f"🔥 MONSTER! ({option_type} 15m={oi_15m:.1f}%, 30m={oi_30m:.1f}%)"
+            return "MONSTER_LOADING", strength, desc, confidence
+        
+        # Pattern 4: EXHAUSTION (30m high but 15m low - slowing down)
+        elif abs_30m > VELOCITY_EXHAUSTION_30M and abs_15m < VELOCITY_EXHAUSTION_15M:
+            strength = "weak"
+            confidence = -15
+            desc = f"😴 Exhaustion ({option_type} 30m={oi_30m:.1f}% high, 15m={oi_15m:.1f}% low)"
+            return "EXHAUSTION", strength, desc, confidence
+        
+        # No special pattern
+        return "NORMAL", "none", f"No velocity pattern ({option_type})", 0
+    
+    @staticmethod
+    def analyze_otm_levels(strike_data, atm_strike, signal_type):
+        """
+        🆕 NEW: OTM Strike Analysis for Support/Resistance (from Image 3)
+        
+        Checks:
+        - OTM +100 (ATM + 100): Resistance for CE, Support for PE
+        - OTM -100 (ATM - 100): Support for CE, Resistance for PE
+        
+        Returns:
+            (has_support, has_resistance, confidence_modifier, details)
+        """
+        otm_above, otm_below = get_otm_strikes(atm_strike)
+        
+        # Get OTM data
+        above_data = strike_data.get(otm_above, {})
+        below_data = strike_data.get(otm_below, {})
+        
+        above_ce_oi = above_data.get('ce_oi', 0)
+        above_pe_oi = above_data.get('pe_oi', 0)
+        below_ce_oi = below_data.get('ce_oi', 0)
+        below_pe_oi = below_data.get('pe_oi', 0)
+        
+        confidence_modifier = 0
+        details = []
+        has_support = False
+        has_resistance = False
+        
+        if signal_type == "CE_BUY":
+            # For CE_BUY (bullish):
+            # - High PE OI at OTM -100 (below) = SUPPORT (good) ✅
+            # - High CE OI at OTM +100 (above) = RESISTANCE (bad) ❌
+            
+            if below_pe_oi > OTM_HIGH_OI_THRESHOLD:
+                has_support = True
+                confidence_modifier += 10
+                details.append(f"✅ Support at {otm_below} (PE OI: {below_pe_oi:,.0f})")
+            
+            if above_ce_oi > OTM_HIGH_OI_THRESHOLD:
+                has_resistance = True
+                confidence_modifier -= 10
+                details.append(f"⚠️ Resistance at {otm_above} (CE OI: {above_ce_oi:,.0f})")
+        
+        elif signal_type == "PE_BUY":
+            # For PE_BUY (bearish):
+            # - High CE OI at OTM +100 (above) = RESISTANCE (good) ✅
+            # - High PE OI at OTM -100 (below) = SUPPORT (bad) ❌
+            
+            if above_ce_oi > OTM_HIGH_OI_THRESHOLD:
+                has_resistance = True
+                confidence_modifier += 10
+                details.append(f"✅ Resistance at {otm_above} (CE OI: {above_ce_oi:,.0f})")
+            
+            if below_pe_oi > OTM_HIGH_OI_THRESHOLD:
+                has_support = True
+                confidence_modifier -= 10
+                details.append(f"⚠️ Support at {otm_below} (PE OI: {below_pe_oi:,.0f})")
+        
+        if not details:
+            details.append("No significant OTM levels")
+        
+        return has_support, has_resistance, confidence_modifier, " | ".join(details)
+    
+    @staticmethod
+    def check_oi_dominance(ce_change, pe_change, signal_type):
+        """
+        🆕 NEW: Check OI Dominance - solves "Both Building" confusion
+        
+        When BOTH CE and PE are building, determine which side is WINNING.
+        Critical fix for 9:37 issue where PE +47% and CE +28% both building.
+        
+        Args:
+            ce_change: CE OI change %
+            pe_change: PE OI change %
+            signal_type: 'CE_BUY' or 'PE_BUY'
+        
+        Returns:
+            (is_dominant, confidence_modifier, reason)
+        """
+        abs_ce = abs(ce_change)
+        abs_pe = abs(pe_change)
+        
+        # Calculate dominance margin
+        if signal_type == "CE_BUY":
+            # For CE_BUY: CE should be UNWINDING (negative) more than PE
+            if ce_change < 0 and pe_change < 0:
+                # Both unwinding - check who's unwinding faster
+                margin = abs_ce - abs_pe
+                if margin > STRONG_DOMINANCE_MARGIN:
+                    return True, DOMINANCE_CONFIDENCE_BOOST, f"CE unwinding dominant: {margin:.1f}% margin"
+                elif margin > MIN_DOMINANCE_MARGIN:
+                    return True, DOMINANCE_CONFIDENCE_BOOST // 2, f"CE unwinding stronger: {margin:.1f}% margin"
+                else:
+                    return False, 0, f"No clear dominance: CE {ce_change:.1f}%, PE {pe_change:.1f}%"
+            
+            # BOTH BUILDING (the 9:37 case!)
+            elif ce_change > 0 and pe_change > 0:
+                # Check if PE building MUCH FASTER (bearish signal despite CE building)
+                margin = abs_pe - abs_ce
+                if margin > STRONG_DOMINANCE_MARGIN:
+                    # PE winning by 20%+ = Strong bearish = Should trigger PE_BUY, NOT CE_BUY!
+                    return False, -20, f"⚠️ PE building dominant (+{margin:.1f}% margin) - Wrong signal!"
+                elif margin > MIN_DOMINANCE_MARGIN:
+                    return False, -10, f"⚠️ PE building faster (+{margin:.1f}% margin)"
+                # CE building faster = OK for CE_BUY
+                elif abs_ce > abs_pe + MIN_DOMINANCE_MARGIN:
+                    return True, DOMINANCE_CONFIDENCE_BOOST // 2, f"CE building dominant: +{abs_ce - abs_pe:.1f}% margin"
+                else:
+                    return False, -5, f"Both building similarly: CE {ce_change:.1f}%, PE {pe_change:.1f}%"
+        
+        elif signal_type == "PE_BUY":
+            # For PE_BUY: PE should be UNWINDING (negative) more than CE
+            if pe_change < 0 and ce_change < 0:
+                margin = abs_pe - abs_ce
+                if margin > STRONG_DOMINANCE_MARGIN:
+                    return True, DOMINANCE_CONFIDENCE_BOOST, f"PE unwinding dominant: {margin:.1f}% margin"
+                elif margin > MIN_DOMINANCE_MARGIN:
+                    return True, DOMINANCE_CONFIDENCE_BOOST // 2, f"PE unwinding stronger: {margin:.1f}% margin"
+                else:
+                    return False, 0, f"No clear dominance: PE {pe_change:.1f}%, CE {ce_change:.1f}%"
+            
+            # BOTH BUILDING (check if PE winning)
+            elif ce_change > 0 and pe_change > 0:
+                margin = abs_pe - abs_ce  # PE - CE
+                if margin > STRONG_DOMINANCE_MARGIN:
+                    # PE building 20%+ faster = Good for PE_BUY!
+                    return True, DOMINANCE_CONFIDENCE_BOOST, f"PE building dominant: +{margin:.1f}% margin"
+                elif margin > MIN_DOMINANCE_MARGIN:
+                    return True, DOMINANCE_CONFIDENCE_BOOST // 2, f"PE building stronger: +{margin:.1f}% margin"
+                # CE building faster = Bad for PE_BUY
+                elif abs_ce > abs_pe + MIN_DOMINANCE_MARGIN:
+                    return False, -20, f"⚠️ CE building dominant (+{abs_ce - abs_pe:.1f}% margin) - Wrong signal!"
+                else:
+                    return False, -5, f"Both building similarly: PE {pe_change:.1f}%, CE {ce_change:.1f}%"
+        
+        return False, 0, "Unclear dominance pattern"
+    
+    @staticmethod
+    def validate_oi_quality(oi_change, strike_oi):
+        """
+        🆕 NEW: Validate OI Data Quality
+        
+        Checks for:
+        1. Abnormal OI changes (>150% = likely error)
+        2. Low liquidity strikes (OI < 10,000)
+        
+        Returns:
+            (is_valid, reason)
+        """
+        # Check for abnormal changes
+        if abs(oi_change) > MAX_OI_CHANGE_PERCENT:
+            return False, f"OI change too high: {oi_change:.1f}% (likely data error)"
+        
+        # Check for low liquidity
+        if strike_oi < MIN_STRIKE_OI:
+            return False, f"Strike illiquid: OI={strike_oi:,.0f} (< {MIN_STRIKE_OI:,.0f})"
+        
+        return True, "OI data quality OK"
+    
+    @staticmethod
+    def calculate_velocity_fallback(oi_5m, oi_15m):
+        """
+        🆕 NEW: Velocity Fallback when 30m not ready
+        
+        Uses 15m vs 5m comparison as fallback velocity indicator.
+        
+        Returns:
+            (pattern, confidence_modifier, description)
+        """
+        abs_5m = abs(oi_5m)
+        abs_15m = abs(oi_15m)
+        
+        # Acceleration: 5m > 15m (getting faster)
+        if abs_5m > abs_15m and abs_5m > 5.0:
+            return "ACCELERATION_FALLBACK", 5, f"Speed ↑ (5m={oi_5m:.1f}% > 15m={oi_15m:.1f}%)"
+        
+        # Deceleration: 5m < 15m (slowing down)
+        elif abs_15m > abs_5m and abs_15m > 5.0:
+            return "DECELERATION_FALLBACK", -5, f"Speed ↓ (5m={oi_5m:.1f}% < 15m={oi_15m:.1f}%)"
+        
+        # Strong consistent
+        elif abs_5m > 8.0 and abs_15m > 8.0:
+            return "STRONG_CONSISTENT", 8, f"Strong & consistent (5m={oi_5m:.1f}%, 15m={oi_15m:.1f}%)"
+        
+        return "NORMAL_FALLBACK", 0, "No special velocity pattern"
+    
+    @staticmethod
+    def check_atm_stability(current_atm, atm_history):
+        """
+        🆕 NEW: Check ATM Strike Stability
+        
+        ATM must be stable for at least 3 scans for reliable OI comparison.
+        
+        Args:
+            current_atm: Current ATM strike
+            atm_history: List of recent ATM strikes
+        
+        Returns:
+            (is_stable, reason)
+        """
+        if len(atm_history) < ATM_STABILITY_SCANS:
+            return False, f"Insufficient ATM history: {len(atm_history)}/{ATM_STABILITY_SCANS} scans"
+        
+        # Check last 3 ATM values
+        recent_atms = atm_history[-ATM_STABILITY_SCANS:]
+        
+        if all(atm == current_atm for atm in recent_atms):
+            return True, f"ATM stable at {current_atm} for {ATM_STABILITY_SCANS} scans"
+        else:
+            return False, f"ATM unstable: {recent_atms} (current: {current_atm})"
+    
+    @staticmethod
+    def analyze_oi_with_price(ce_5m, ce_15m, pe_5m, pe_15m, price_change_pct):
+        """
+        OI Analysis with PRICE direction + IMPROVED NAMING
+        
+        Detects 6 scenarios (with human-readable names):
+        1. CE Long Buildup → "SUPPORT BOUNCE" (CE↑ Price↑)
+        2. CE Short Covering → "WEAK BOUNCE" (CE↓ Price↑)
+        3. CE Long Unwinding → "PROFIT BOOKING" (CE↓ Price↓)
+        4. PE Short Buildup → "RESISTANCE REJECT" (PE↑ Price↓)
+        5. PE Short Covering → "WEAK DROP" (PE↓ Price↓)
+        6. PE Long Unwinding → "BEAR PROFIT BOOKING" (PE↓ Price↑)
+        """
+        
+        OI_BUILDUP_THRESHOLD = 3.0
+        OI_UNWINDING_THRESHOLD = -5.0
+        STRONG_BUILDUP = 7.0
+        STRONG_UNWINDING = -8.0
+        PRICE_UP = 0.05
+        PRICE_DOWN = -0.05
+        
+        result = {
+            'ce_scenario': None,
+            'pe_scenario': None,
+            'ce_signal': 'NEUTRAL',
+            'pe_signal': 'NEUTRAL',
+            'ce_strength': 'none',
+            'pe_strength': 'none',
+            'primary_direction': 'NEUTRAL',
+            'confidence_boost': 0,
+            'details': {},
+            'human_name': 'NO_PATTERN'  # 🆕 NEW: Human-readable name
+        }
+        
+        # ━━━━━━━━━━━━ CE ANALYSIS ━━━━━━━━━━━━
+        
+        # Scenario 1: CE LONG BUILDUP → "SUPPORT BOUNCE"
+        if (ce_5m > OI_BUILDUP_THRESHOLD and 
+            ce_15m > OI_BUILDUP_THRESHOLD and 
+            price_change_pct > PRICE_UP):
+            
+            if ce_15m > STRONG_BUILDUP and ce_5m > STRONG_BUILDUP:
+                strength = 'strong'
+                confidence = 95
+            elif ce_15m > OI_BUILDUP_THRESHOLD * 1.5:
+                strength = 'medium'
+                confidence = 85
+            else:
+                strength = 'weak'
+                confidence = 75
+            
+            result['ce_scenario'] = 'LONG_BUILDUP'
+            result['ce_signal'] = 'STRONG_BULLISH'
+            result['ce_strength'] = strength
+            result['confidence_boost'] = confidence - 70
+            result['human_name'] = 'SUPPORT_BOUNCE'  # 🆕 NEW
+            result['details']['ce'] = {
+                'type': 'Fresh Call Buying',
+                'meaning': 'Bulls adding calls (Support Bounce)',
+                'oi_5m': ce_5m,
+                'oi_15m': ce_15m,
+                'price_move': price_change_pct,
+                'action': 'BUY_CALL_HIGH_CONFIDENCE'
+            }
+        
+        # Scenario 2: CE SHORT COVERING → "WEAK BOUNCE"
+        elif (ce_5m < OI_UNWINDING_THRESHOLD and 
+              ce_15m < OI_UNWINDING_THRESHOLD and 
+              price_change_pct > PRICE_UP):
+            
+            if ce_15m < STRONG_UNWINDING:
+                strength = 'medium'
+                confidence = 65
+            else:
+                strength = 'weak'
+                confidence = 55
+            
+            result['ce_scenario'] = 'SHORT_COVERING'
+            result['ce_signal'] = 'WEAK_BULLISH'
+            result['ce_strength'] = strength
+            result['confidence_boost'] = -10
+            result['human_name'] = 'WEAK_BOUNCE'  # 🆕 NEW
+            result['details']['ce'] = {
+                'type': 'Call Unwinding (Short Covering)',
+                'meaning': 'Bears exiting calls (Weak Bounce)',
+                'oi_5m': ce_5m,
+                'oi_15m': ce_15m,
+                'price_move': price_change_pct,
+                'action': 'WAIT_OR_SKIP',
+                'warning': '⚠️ Temporary bounce, not sustainable'
+            }
+        
+        # Scenario 3: CE LONG UNWINDING → "PROFIT BOOKING"
+        elif (ce_5m < OI_UNWINDING_THRESHOLD and 
+              ce_15m < OI_UNWINDING_THRESHOLD and 
+              price_change_pct < PRICE_DOWN):
+            
+            if ce_15m < STRONG_UNWINDING:
+                strength = 'medium'
+                confidence = 70
+            else:
+                strength = 'weak'
+                confidence = 60
+            
+            result['ce_scenario'] = 'LONG_UNWINDING'
+            result['ce_signal'] = 'WEAK_BEARISH'
+            result['ce_strength'] = strength
+            result['human_name'] = 'PROFIT_BOOKING'  # 🆕 NEW
+            result['details']['ce'] = {
+                'type': 'Call Unwinding (Long Exit)',
+                'meaning': 'Bulls booking profit',
+                'oi_5m': ce_5m,
+                'oi_15m': ce_15m,
+                'price_move': price_change_pct,
+                'action': 'AVOID_CALL',
+                'warning': '⚠️ Profit booking'
+            }
+        
+        # ━━━━━━━━━━━━ PE ANALYSIS ━━━━━━━━━━━━
+        
+        # Scenario 4: PE SHORT BUILDUP → "RESISTANCE REJECT"
+        if (pe_5m > OI_BUILDUP_THRESHOLD and 
+            pe_15m > OI_BUILDUP_THRESHOLD and 
+            price_change_pct < PRICE_DOWN):
+            
+            if pe_15m > STRONG_BUILDUP and pe_5m > STRONG_BUILDUP:
+                strength = 'strong'
+                confidence = 95
+            elif pe_15m > OI_BUILDUP_THRESHOLD * 1.5:
+                strength = 'medium'
+                confidence = 85
+            else:
+                strength = 'weak'
+                confidence = 75
+            
+            result['pe_scenario'] = 'SHORT_BUILDUP'
+            result['pe_signal'] = 'STRONG_BEARISH'
+            result['pe_strength'] = strength
+            result['confidence_boost'] = max(result['confidence_boost'], confidence - 70)
+            result['human_name'] = 'RESISTANCE_REJECT'  # 🆕 NEW
+            result['details']['pe'] = {
+                'type': 'Fresh Put Buying',
+                'meaning': 'Bears adding puts (Resistance Reject)',
+                'oi_5m': pe_5m,
+                'oi_15m': pe_15m,
+                'price_move': price_change_pct,
+                'action': 'BUY_PUT_HIGH_CONFIDENCE'
+            }
+        
+        # Scenario 5: PE SHORT COVERING → "WEAK DROP"
+        elif (pe_5m < OI_UNWINDING_THRESHOLD and 
+              pe_15m < OI_UNWINDING_THRESHOLD and 
+              price_change_pct < PRICE_DOWN):
+            
+            if pe_15m < STRONG_UNWINDING:
+                strength = 'medium'
+                confidence = 65
+            else:
+                strength = 'weak'
+                confidence = 55
+            
+            result['pe_scenario'] = 'SHORT_COVERING'
+            result['pe_signal'] = 'WEAK_BEARISH'
+            result['pe_strength'] = strength
+            result['confidence_boost'] = min(result['confidence_boost'], -10)
+            result['human_name'] = 'WEAK_DROP'  # 🆕 NEW
+            result['details']['pe'] = {
+                'type': 'Put Unwinding (Short Covering)',
+                'meaning': 'Bulls exiting puts (Weak Drop)',
+                'oi_5m': pe_5m,
+                'oi_15m': pe_15m,
+                'price_move': price_change_pct,
+                'action': 'WAIT_OR_SKIP',
+                'warning': '⚠️ Temporary dip'
+            }
+        
+        # Scenario 6: PE LONG UNWINDING → "BEAR PROFIT BOOKING"
+        elif (pe_5m < OI_UNWINDING_THRESHOLD and 
+              pe_15m < OI_UNWINDING_THRESHOLD and 
+              price_change_pct > PRICE_UP):
+            
+            if pe_15m < STRONG_UNWINDING:
+                strength = 'medium'
+                confidence = 70
+            else:
+                strength = 'weak'
+                confidence = 60
+            
+            result['pe_scenario'] = 'LONG_UNWINDING'
+            result['pe_signal'] = 'WEAK_BULLISH'
+            result['pe_strength'] = strength
+            result['human_name'] = 'BEAR_PROFIT_BOOKING'  # 🆕 NEW
+            result['details']['pe'] = {
+                'type': 'Put Unwinding (Long Exit)',
+                'meaning': 'Bears booking profit',
+                'oi_5m': pe_5m,
+                'oi_15m': pe_15m,
+                'price_move': price_change_pct,
+                'action': 'AVOID_PUT',
+                'warning': '⚠️ Bear profit booking'
+            }
+        
+        # Determine Primary Direction
+        ce_bullish = result['ce_signal'] in ['STRONG_BULLISH', 'WEAK_BULLISH']
+        pe_bullish = result['pe_signal'] in ['STRONG_BULLISH', 'WEAK_BULLISH']
+        ce_bearish = result['ce_signal'] in ['STRONG_BEARISH', 'WEAK_BEARISH']
+        pe_bearish = result['pe_signal'] in ['STRONG_BEARISH', 'WEAK_BEARISH']
+        
+        if ce_bullish and pe_bullish:
+            result['primary_direction'] = 'STRONG_BULLISH'
+            result['confidence_boost'] += 15
+        elif ce_bearish and pe_bearish:
+            result['primary_direction'] = 'STRONG_BEARISH'
+            result['confidence_boost'] += 15
+        elif 'STRONG_BULLISH' in [result['ce_signal'], result['pe_signal']]:
+            result['primary_direction'] = 'BULLISH'
+        elif 'STRONG_BEARISH' in [result['ce_signal'], result['pe_signal']]:
+            result['primary_direction'] = 'BEARISH'
+        else:
+            result['primary_direction'] = 'NEUTRAL'
+        
+        return result
     
     @staticmethod
     def detect_unwinding(ce_5m, ce_15m, pe_5m, pe_15m):
-        """
-        Detect CE/PE unwinding - AND LOGIC (both timeframes required)
-        This ensures quality signals, not just noise
-        """
-        # CE unwinding - BOTH 5m AND 15m must show unwinding
+        """LEGACY - kept for backward compatibility"""
         ce_unwinding = (ce_15m < -MIN_OI_15M_FOR_ENTRY and ce_5m < -MIN_OI_5M_FOR_ENTRY)
         
-        # Strength based on 15m (primary timeframe)
         if ce_15m < -STRONG_OI_15M_THRESHOLD and ce_5m < -STRONG_OI_5M_THRESHOLD:
             ce_strength = 'strong'
         elif ce_15m < -MIN_OI_15M_FOR_ENTRY and ce_5m < -MIN_OI_5M_FOR_ENTRY:
@@ -73,10 +570,8 @@ class OIAnalyzer:
         else:
             ce_strength = 'weak'
         
-        # PE unwinding - BOTH 5m AND 15m must show unwinding
         pe_unwinding = (pe_15m < -MIN_OI_15M_FOR_ENTRY and pe_5m < -MIN_OI_5M_FOR_ENTRY)
         
-        # Strength
         if pe_15m < -STRONG_OI_15M_THRESHOLD and pe_5m < -STRONG_OI_5M_THRESHOLD:
             pe_strength = 'strong'
         elif pe_15m < -MIN_OI_15M_FOR_ENTRY and pe_5m < -MIN_OI_5M_FOR_ENTRY:
@@ -84,7 +579,6 @@ class OIAnalyzer:
         else:
             pe_strength = 'weak'
         
-        # Multi-timeframe confirmation (both showing negative)
         multi_tf = (ce_5m < -2.0 and ce_15m < -3.0) or (pe_5m < -2.0 and pe_15m < -3.0)
         
         return {
@@ -97,101 +591,33 @@ class OIAnalyzer:
     
     @staticmethod
     def get_atm_data(strike_data, atm_strike):
-        """Get ATM strike data (current values only)"""
+        """Get ATM strike data"""
         return strike_data.get(atm_strike, {
-            'ce_oi': 0,
-            'pe_oi': 0,
-            'ce_vol': 0,
-            'pe_vol': 0,
-            'ce_ltp': 0,
-            'pe_ltp': 0
+            'ce_oi': 0, 'pe_oi': 0,
+            'ce_vol': 0, 'pe_vol': 0,
+            'ce_ltp': 0, 'pe_ltp': 0
         })
-    
-    @staticmethod
-    def get_atm_oi_changes(strike_data, atm_strike, previous_strike_data=None):
-        """
-        Get ATM strike data WITH OI change calculations
-        Compares current vs previous scan
-        """
-        current = strike_data.get(atm_strike, {
-            'ce_oi': 0,
-            'pe_oi': 0,
-            'ce_vol': 0,
-            'pe_vol': 0,
-            'ce_ltp': 0,
-            'pe_ltp': 0
-        })
-        
-        ce_change_pct = 0.0
-        pe_change_pct = 0.0
-        
-        if previous_strike_data:
-            previous = previous_strike_data.get(atm_strike, {
-                'ce_oi': 0,
-                'pe_oi': 0
-            })
-            
-            # CE OI change
-            prev_ce_oi = previous.get('ce_oi', 0)
-            curr_ce_oi = current.get('ce_oi', 0)
-            
-            if prev_ce_oi > 0:
-                ce_diff = curr_ce_oi - prev_ce_oi
-                ce_change_pct = (ce_diff / prev_ce_oi) * 100
-            elif curr_ce_oi > 0:
-                ce_change_pct = 100.0
-            
-            # PE OI change
-            prev_pe_oi = previous.get('pe_oi', 0)
-            curr_pe_oi = current.get('pe_oi', 0)
-            
-            if prev_pe_oi > 0:
-                pe_diff = curr_pe_oi - prev_pe_oi
-                pe_change_pct = (pe_diff / prev_pe_oi) * 100
-            elif curr_pe_oi > 0:
-                pe_change_pct = 100.0
-        
-        return {
-            'ce_oi': current.get('ce_oi', 0),
-            'pe_oi': current.get('pe_oi', 0),
-            'ce_vol': current.get('ce_vol', 0),
-            'pe_vol': current.get('pe_vol', 0),
-            'ce_ltp': current.get('ce_ltp', 0),
-            'pe_ltp': current.get('pe_ltp', 0),
-            'ce_change_pct': round(ce_change_pct, 1),
-            'pe_change_pct': round(pe_change_pct, 1),
-            'has_previous_data': previous_strike_data is not None,
-            'atm_strike': atm_strike
-        }
     
     @staticmethod
     def check_oi_reversal(signal_type, oi_changes_history, threshold=EXIT_OI_REVERSAL_THRESHOLD):
-        """
-        Check OI reversal with SUSTAINED building (not single candle spike)
-        Requires EXIT_OI_CONFIRMATION_CANDLES consecutive candles
-        """
+        """Check OI reversal with sustained building"""
         if not oi_changes_history or len(oi_changes_history) < EXIT_OI_CONFIRMATION_CANDLES:
             return False, 'none', 0.0, "Insufficient data"
         
-        # Get last N candles
         recent = oi_changes_history[-EXIT_OI_CONFIRMATION_CANDLES:]
         current = recent[-1]
         
-        # Count sustained building
         building_count = sum(1 for oi in recent if oi > threshold)
         
-        # Strong reversal: ALL recent candles building
         if building_count >= EXIT_OI_CONFIRMATION_CANDLES:
             avg_building = sum(recent) / len(recent)
             strength = 'strong' if avg_building > 5.0 else 'medium'
-            return True, strength, avg_building, f"{signal_type} sustained building: {building_count}/{len(recent)} candles"
+            return True, strength, avg_building, f"{signal_type} sustained building"
         
-        # Very strong single spike (exception)
         if current > EXIT_OI_SPIKE_THRESHOLD:
             return True, 'spike', current, f"{signal_type} spike: {current:.1f}%"
         
-        # Not confirmed
-        return False, 'none', current, f"{signal_type} OI change: {current:.1f}% (not sustained)"
+        return False, 'none', current, f"{signal_type} OI: {current:.1f}% (not sustained)"
 
 
 # ==================== Volume Analyzer ====================
@@ -200,7 +626,7 @@ class VolumeAnalyzer:
     
     @staticmethod
     def calculate_total_volume(strike_data):
-        """Calculate total CE/PE volume (uses ALL 11 strikes)"""
+        """Calculate total CE/PE volume"""
         if not strike_data:
             return 0, 0
         
@@ -210,15 +636,12 @@ class VolumeAnalyzer:
     
     @staticmethod
     def detect_volume_spike(current, avg):
-        """Detect volume spike"""
-        if avg == 0:
-            return False, 0.0
-        ratio = current / avg
-        return ratio >= VOL_SPIKE_MULTIPLIER, round(ratio, 2)
+        """⚠️ DISABLED: Volume spike (unreliable data)"""
+        return False, 1.0
     
     @staticmethod
     def calculate_order_flow(strike_data):
-        """Calculate order flow ratio (CE vol / PE vol)"""
+        """Calculate order flow ratio"""
         ce_vol, pe_vol = VolumeAnalyzer.calculate_total_volume(strike_data)
         
         if ce_vol == 0 and pe_vol == 0:
@@ -232,38 +655,25 @@ class VolumeAnalyzer:
         return round(max(0.2, min(ratio, 5.0)), 2)
     
     @staticmethod
-    def analyze_volume_trend(df, periods=5):
-        """Analyze volume trend from futures candles"""
-        if df is None or len(df) < periods + 1:
-            return {
-                'trend': 'unknown',
-                'avg_volume': 0,
-                'current_volume': 0,
-                'ratio': 1.0
-            }
-        
-        recent = df['volume'].tail(periods + 1)
-        avg = recent.iloc[:-1].mean()
-        current = recent.iloc[-1]
-        ratio = current / avg if avg > 0 else 1.0
-        
-        trend = 'increasing' if ratio > 1.3 else 'decreasing' if ratio < 0.7 else 'stable'
-        
+    def analyze_volume_trend(df, periods=15, futures_ltp=None):
+        """⚠️ DISABLED: Volume analysis (stale data)"""
         return {
-            'trend': trend,
-            'avg_volume': round(avg, 2),
-            'current_volume': round(current, 2),
-            'ratio': round(ratio, 2)
+            'trend': 'unknown',
+            'avg_volume': 0,
+            'current_volume': 0,
+            'ratio': 1.0,
+            'skipped_candles': 0,
+            'disabled': True
         }
 
 
 # ==================== Technical Analyzer ====================
 class TechnicalAnalyzer:
-    """Technical indicators: VWAP, ATR, Candles"""
+    """Technical indicators"""
     
     @staticmethod
     def calculate_vwap(df):
-        """Calculate VWAP from futures candles"""
+        """Calculate VWAP"""
         if df is None or len(df) == 0:
             return None
         
@@ -288,54 +698,49 @@ class TechnicalAnalyzer:
     
     @staticmethod
     def validate_signal_with_vwap(signal_type, spot, vwap, atr):
-        """
-        Validate if signal should be taken based on VWAP distance
-        BLOCKING CHECK - rejects signals too far from fair value
-        """
+        """STRICT VWAP validation"""
         if not vwap or not spot or not atr:
             return False, "Missing VWAP/Price data", 0
         
         distance = spot - vwap
         
-        # Calculate buffer
         if VWAP_STRICT_MODE:
             buffer = atr * VWAP_DISTANCE_MAX_ATR_MULTIPLE
         else:
             buffer = VWAP_BUFFER
         
         if signal_type == "CE_BUY":
-            # CE buy: Price should be near or above VWAP
             if distance < -buffer:
-                return False, f"Price {abs(distance):.0f} pts below VWAP (too far)", 0
+                return False, f"Price {abs(distance):.0f} pts below VWAP", 0
             elif distance > buffer * 3:
-                return False, f"Price {distance:.0f} pts above VWAP (overextended)", 0
+                return False, f"Price {distance:.0f} pts above VWAP", 0
             else:
-                # Score based on proximity
                 if distance > 0:
                     score = min(100, 80 + (distance / buffer * 20))
                 else:
                     score = max(60, 80 - (abs(distance) / buffer * 20))
-                return True, f"VWAP distance OK: {distance:+.0f} pts", int(score)
+                return True, f"VWAP OK: {distance:+.0f} pts", int(score)
         
         elif signal_type == "PE_BUY":
-            # PE buy: Price should be near or below VWAP
+            if distance > 0:
+                return False, f"⚠️ Price ABOVE VWAP (+{distance:.0f} pts) - NOT BEARISH!", 0
+            
             if distance > buffer:
-                return False, f"Price {distance:.0f} pts above VWAP (too far)", 0
+                return False, f"Price {distance:.0f} pts above VWAP", 0
             elif distance < -buffer * 3:
-                return False, f"Price {abs(distance):.0f} pts below VWAP (overextended)", 0
+                return False, f"Price {abs(distance):.0f} pts below VWAP", 0
             else:
-                # Score based on proximity
                 if distance < 0:
                     score = min(100, 80 + (abs(distance) / buffer * 20))
                 else:
                     score = max(60, 80 - (distance / buffer * 20))
-                return True, f"VWAP distance OK: {distance:+.0f} pts", int(score)
+                return True, f"VWAP OK: {distance:+.0f} pts", int(score)
         
         return False, "Unknown signal type", 0
     
     @staticmethod
     def calculate_atr(df, period=ATR_PERIOD):
-        """Calculate ATR from futures candles"""
+        """Calculate ATR"""
         if df is None or len(df) < period:
             return ATR_FALLBACK
         
@@ -386,10 +791,7 @@ class TechnicalAnalyzer:
                 'lower_wick': round(lower_wick, 2),
                 'rejection': rejection,
                 'rejection_type': rejection_type,
-                'open': o,
-                'high': h,
-                'low': l,
-                'close': c
+                'open': o, 'high': h, 'low': l, 'close': c
             }
         except Exception as e:
             logger.error(f"❌ Candle error: {e}")
@@ -423,17 +825,10 @@ class TechnicalAnalyzer:
     @staticmethod
     def _empty_candle():
         return {
-            'color': 'UNKNOWN',
-            'size': 0,
-            'body_size': 0,
-            'upper_wick': 0,
-            'lower_wick': 0,
-            'rejection': False,
-            'rejection_type': None,
-            'open': 0,
-            'high': 0,
-            'low': 0,
-            'close': 0
+            'color': 'UNKNOWN', 'size': 0, 'body_size': 0,
+            'upper_wick': 0, 'lower_wick': 0,
+            'rejection': False, 'rejection_type': None,
+            'open': 0, 'high': 0, 'low': 0, 'close': 0
         }
 
 
@@ -443,7 +838,7 @@ class MarketAnalyzer:
     
     @staticmethod
     def calculate_max_pain(strike_data, spot_price):
-        """Calculate max pain strike (uses all 11 strikes)"""
+        """Calculate max pain strike"""
         if not strike_data:
             return 0, 0.0
         
@@ -474,7 +869,7 @@ class MarketAnalyzer:
     
     @staticmethod
     def detect_gamma_zone():
-        """Check if expiry day (weekly options)"""
+        """Check if expiry day"""
         try:
             from config import get_next_weekly_expiry
             today = datetime.now(IST).date()
