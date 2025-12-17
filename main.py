@@ -1,21 +1,45 @@
 """
-NIFTY Trading Bot - Main Orchestrator v8.1 - HOTFIX
+NIFTY Trading Bot - Main Orchestrator v8.2 - PRICE ACTION FIRST
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🆕 v8.1 HOTFIX (Critical Bug Fixes):
-1. Position tracking cleared on startup (fixes "Already in position" bug)
-2. Scan counter fixed (was stuck at #21)
-3. Stale position state auto-detected and cleared
-4. Better position validation logic
+🆕 v8.2 MAJOR UPGRADE (GEMINI RECOMMENDATION):
+**"Price First, OI Second" - Prevents False Signals!**
 
-🆕 v8.0 FEATURES:
-1. OI Dominance comparison (solves "both building" confusion)
-2. Opening volatility filter (skip 9:15-9:25)
-3. ATM stability check (blocks signals when ATM shifts)
-4. Real-time revalidation (30s wait + recheck)
-5. Time-based adjustments (lunch penalty, closing hour)
-6. OI quality validation (reject bad data)
-7. Volume validation (minimum threshold)
-8. Velocity fallback (when 30m not ready)
+NEW FEATURES:
+1. ✅ Breakout Detection (20-period high/low)
+2. ✅ EMA 9 & 21 alignment check
+3. ✅ VWAP position validation
+4. ✅ Resistance/Support detection (Swing High/Low)
+5. ✅ 3-Stage validation (Price → OI → Final Check)
+
+🚨 CRITICAL IMPROVEMENTS OVER v8.1:
+- v8.1: Generated signals in sideways/choppy markets ❌
+- v8.2: Only trades on confirmed breakouts ✅
+- v8.1: Could enter at resistance/support ❌
+- v8.2: Rejects signals at resistance/support ✅
+- v8.1: OI-first approach (Gemini said this is wrong!) ❌
+- v8.2: Price-first approach (Gemini's recommendation!) ✅
+
+SIGNAL FLOW:
+1. Check Price Action (Breakout + EMAs + VWAP)
+2. If price clear → Check OI signals
+3. Final validation: Price vs OI alignment
+4. Only then → Generate signal!
+
+🆕 v8.1 HOTFIX (Previous):
+1. Position tracking cleared on startup
+2. Scan counter fixed
+3. Stale position detection
+4. Better position validation
+
+🆕 v8.0 FEATURES (Base):
+1. OI Dominance comparison
+2. Opening volatility filter
+3. ATM stability check
+4. Real-time revalidation
+5. Time-based adjustments
+6. OI quality validation
+7. Volume validation
+8. Velocity fallback
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -29,8 +53,9 @@ from analyzers import OIAnalyzer, VolumeAnalyzer, TechnicalAnalyzer, MarketAnaly
 from signal_engine import SignalGenerator, SignalValidator
 from position_tracker import PositionTracker
 from alerts import TelegramBot, MessageFormatter
+from price_action_v8 import PriceActionAnalyzer  # 🆕 v8.2: GEMINI RECOMMENDATION
 
-BOT_VERSION = "8.1-HOTFIX"
+BOT_VERSION = "8.2-PRICE-ACTION"
 
 logger = setup_logger("main")
 
@@ -55,6 +80,7 @@ class NiftyTradingBot:
         self.volume_analyzer = VolumeAnalyzer()
         self.technical_analyzer = TechnicalAnalyzer()
         self.market_analyzer = MarketAnalyzer()
+        self.price_analyzer = PriceActionAnalyzer()  # 🆕 v8.2: Price Action First!
         
         self.signal_gen = SignalGenerator()
         self.signal_validator = SignalValidator()
@@ -352,6 +378,13 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
             
             logger.info(f"  ✅ Futures LIVE: ₹{futures_ltp:.2f}")
             
+            # 🆕 v8.2: Store price for Price Action Analysis (GEMINI RECOMMENDATION)
+            self.price_analyzer.store_price_snapshot(
+                price=futures_ltp,
+                volume=0,  # Volume not available from futures LTP
+                timestamp=now_ist
+            )
+            
             # Save price
             self.memory.save_price(futures_ltp)
             
@@ -584,6 +617,43 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
                 logger.info("  ⏸️ ATM unstable - Skipping signal generation")
                 return
             
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # 🔥 v8.2: PRICE ACTION FIRST! (GEMINI RECOMMENDATION)
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            logger.info("")
+            logger.info("🎯 STEP 1: Checking PRICE ACTION (Gemini's 'Price First' Rule)...")
+            
+            price_check = self.price_analyzer.comprehensive_check(futures_ltp)
+            
+            logger.info(f"  📊 Price Action Verdict: {price_check['verdict']}")
+            logger.info(f"     Scores → Bullish: {price_check['bullish_score']}/85 | Bearish: {price_check['bearish_score']}/85")
+            
+            # Log key reasons
+            if price_check['reasons']:
+                for reason in price_check['reasons'][:3]:  # Show top 3 reasons
+                    logger.info(f"     {reason}")
+            
+            # 🚨 CRITICAL: Reject if NO clear price action
+            if price_check['verdict'] == 'NO_CLEAR_SETUP':
+                logger.warning("  ⚠️ Price Action: NO CLEAR SETUP - Skipping OI analysis")
+                logger.warning("     Gemini's rule: 'Never trade in choppy/sideways market'")
+                return
+            
+            # 🚨 CRITICAL: Check for resistance/support traps
+            if price_check['details']['levels']['near_resistance']:
+                logger.warning(f"  ⚠️ Price near RESISTANCE: {price_check['details']['levels']['resistance_level']:.2f}")
+                logger.warning("     CE_BUY signals will be REJECTED (Gemini's rule)")
+            
+            if price_check['details']['levels']['near_support']:
+                logger.warning(f"  ⚠️ Price near SUPPORT: {price_check['details']['levels']['support_level']:.2f}")
+                logger.warning("     PE_BUY signals will be REJECTED (Gemini's rule)")
+            
+            logger.info("  ✅ Price Action passed! Proceeding to OI analysis...")
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            
+            logger.info("")
+            logger.info("🎯 STEP 2: Checking OI SIGNALS...")
+            
             # 🔥 NEW: Check warmup status
             tracker_status = self.oi_tracker.get_status()
             is_fully_warmed = tracker_status['ready_15m']  # 15m warmup
@@ -637,8 +707,50 @@ Warmup: 5m ⏳ | 15m ⏳ | 30m ⏳
             )
             
             if not signal:
-                logger.info("  ⏹️ No valid setup at this time")
+                logger.info("  ⏹️ No valid OI setup at this time")
                 return
+            
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            # 🔥 v8.2: FINAL PRICE ACTION VALIDATION (CRITICAL!)
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            logger.info("")
+            logger.info("🎯 STEP 3: FINAL VALIDATION - Price Action vs OI Signal...")
+            
+            # Check if signal type matches price action
+            if signal.signal_type == SignalType.CE_BUY:
+                if not price_check['bullish']:
+                    logger.warning("  🚨 CE_BUY REJECTED BY PRICE ACTION!")
+                    logger.warning(f"     OI says: Bullish | Price says: {price_check['verdict']}")
+                    logger.warning(f"     Gemini's rule: 'Never buy CE without bullish price confirmation'")
+                    return
+                
+                # Check resistance
+                if price_check['details']['levels']['near_resistance']:
+                    logger.warning("  🚨 CE_BUY REJECTED - Price at RESISTANCE!")
+                    logger.warning(f"     Resistance: {price_check['details']['levels']['resistance_level']:.2f}")
+                    logger.warning(f"     Gemini's rule: 'Never buy at resistance, even if OI is bullish'")
+                    return
+                
+                logger.info(f"  ✅ CE_BUY validated by price action (Score: {price_check['bullish_score']}/85)")
+            
+            elif signal.signal_type == SignalType.PE_BUY:
+                if not price_check['bearish']:
+                    logger.warning("  🚨 PE_BUY REJECTED BY PRICE ACTION!")
+                    logger.warning(f"     OI says: Bearish | Price says: {price_check['verdict']}")
+                    logger.warning(f"     Gemini's rule: 'Never buy PE without bearish price confirmation'")
+                    return
+                
+                # Check support
+                if price_check['details']['levels']['near_support']:
+                    logger.warning("  🚨 PE_BUY REJECTED - Price at SUPPORT!")
+                    logger.warning(f"     Support: {price_check['details']['levels']['support_level']:.2f}")
+                    logger.warning(f"     Gemini's rule: 'Never sell at support, even if OI is bearish'")
+                    return
+                
+                logger.info(f"  ✅ PE_BUY validated by price action (Score: {price_check['bearish_score']}/85)")
+            
+            logger.info("  🎉 Signal passed ALL validations (Price + OI)!")
+            # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
             # 🔥 NEW: Early signal filter (9:25-9:30)
             if is_early_time and not is_fully_warmed:
