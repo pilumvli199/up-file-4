@@ -413,8 +413,8 @@ class PriceActionAnalyzer:
         # FINAL VERDICT
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         result = {
-            'bullish': bullish_score >= 50,  # Need at least 50/85 points
-            'bearish': bearish_score >= 50,
+            'bullish': bullish_score >= 35,  # 🔥 LOWERED from 50 to 35 to catch earlier moves
+            'bearish': bearish_score >= 35,
             'bullish_score': bullish_score,
             'bearish_score': bearish_score,
             'confidence': max(bullish_score, bearish_score),
@@ -430,9 +430,9 @@ class PriceActionAnalyzer:
         }
         
         # Set verdict
-        if result['bullish'] and result['confidence'] >= 50:
+        if result['bullish'] and result['confidence'] >= 35:  # 🔥 LOWERED from 50 to 35
             result['verdict'] = 'BULLISH_CONFIRMED'
-        elif result['bearish'] and result['confidence'] >= 50:
+        elif result['bearish'] and result['confidence'] >= 35:  # 🔥 LOWERED from 50 to 35
             result['verdict'] = 'BEARISH_CONFIRMED'
         else:
             result['verdict'] = 'NO_CLEAR_SETUP'
